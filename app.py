@@ -57,31 +57,23 @@ def read_uploaded(file):
 # ---------------------------------------------------------------------------
 
 PRESET_COMPONENTS = {
-    "Total HOA (3~7차)": {"orders": [3, 4, 5, 6, 7], "radial_abs": None},
-    "3rd-order HOA": {"orders": [3], "radial_abs": None},
-    "4th-order HOA": {"orders": [4], "radial_abs": None},
-    "5th-order HOA": {"orders": [5], "radial_abs": None},
-    "6th-order HOA": {"orders": [6], "radial_abs": None},
-    "7th-order HOA": {"orders": [7], "radial_abs": None},
-    "Coma (3차, Radial ±1)": {"orders": [3], "radial_abs": 1},
-    "Trefoil (3차, Radial ±3)": {"orders": [3], "radial_abs": 3},
-    "Spherical Aberration (4차, Radial 0)": {"orders": [4], "radial_abs": 0},
-    "Secondary Astigmatism (4차, Radial ±2)": {"orders": [4], "radial_abs": 2},
-    "Quadrafoil (4차, Radial ±4)": {"orders": [4], "radial_abs": 4},
-    "Astigmatism (2차, Radial ±2)": {"orders": [2], "radial_abs": 2},
-    "Defocus (2차, Radial 0)": {"orders": [2], "radial_abs": 0},
-    "Tilt (1차, Radial ±1)": {"orders": [1], "radial_abs": 1},
+    "고위수차 (Total HOA, 3~7차)": {"orders": [3, 4, 5, 6, 7], "radial_abs": None},
+    "3차항 고위수차 (3rd-order HOA)": {"orders": [3], "radial_abs": None},
+    "4차항 고위수차 (4th-order HOA)": {"orders": [4], "radial_abs": None},
+    "코마 (Coma, 3차·Radial ±1)": {"orders": [3], "radial_abs": 1},
+    "세조각수차 (Trefoil, 3차·Radial ±3)": {"orders": [3], "radial_abs": 3},
+    "구면수차 (Spherical Aberration, 4차·Radial 0)": {"orders": [4], "radial_abs": 0},
 }
 
-
-def build_individual_components(df):
-    """No 1~35 개별 항목을 지표 사전에 추가 (NAME 기준, No로 구분)."""
-    comps = {}
-    lookup = df[["NO", "ORDER", "RADIAL", "NAME"]].drop_duplicates().sort_values("NO")
-    for _, row in lookup.iterrows():
-        label = f"No{int(row['NO'])}. {row['NAME']} (Order {int(row['ORDER'])}, Radial {int(row['RADIAL'])})"
-        comps[label] = {"no": int(row["NO"])}
-    return comps
+# 지표별 계산식 (화면 상단에 표시용)
+COMPONENT_FORMULAS = {
+    "고위수차 (Total HOA, 3~7차)": r"HOA_{total} = \sqrt{\sum_{Order=3}^{7} \sum_{Radial} C_{Order,Radial}^{\,2}}",
+    "3차항 고위수차 (3rd-order HOA)": r"HOA_{3rd} = \sqrt{\sum_{Radial} C_{3,Radial}^{\,2}} \; (No.6\!\sim\!9)",
+    "4차항 고위수차 (4th-order HOA)": r"HOA_{4th} = \sqrt{\sum_{Radial} C_{4,Radial}^{\,2}} \; (No.10\!\sim\!14)",
+    "코마 (Coma, 3차·Radial ±1)": r"Coma = \sqrt{C_{3,-1}^{\,2} + C_{3,+1}^{\,2}} \; (No.7,\ No.8)",
+    "세조각수차 (Trefoil, 3차·Radial ±3)": r"Trefoil = \sqrt{C_{3,-3}^{\,2} + C_{3,+3}^{\,2}} \; (No.6,\ No.9)",
+    "구면수차 (Spherical Aberration, 4차·Radial 0)": r"SA = \left| C_{4,0} \right| \; (No.12)",
+}
 
 
 def compute_component(df, spec):
@@ -206,6 +198,23 @@ def plot_bland_altman(d, stats, metric_name):
 # UI
 # ---------------------------------------------------------------------------
 
+st.markdown(
+    """
+    <style>
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+        background-color: #FFFFFF !important;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #FFFFFF !important;
+    }
+    .stApp, .stApp * {
+        color: #1a1a1a;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("Zernike 계수 분석 대시보드")
 st.caption("시험기기 / 대조기기 반복측정 Zernike 데이터를 업로드하여 계수 계산, 반복도, 일치도 분석을 수행합니다.")
 
@@ -226,22 +235,21 @@ except Exception as e:
     st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
     st.stop()
 
-# 지표 선택 목록 구성 (두 파일 공통 NO 기준으로 개별 항목 생성)
-individual_test = build_individual_components(df_test)
-all_components = {**PRESET_COMPONENTS, **individual_test}
-component_names = list(all_components.keys())
+component_names = list(PRESET_COMPONENTS.keys())
 
 st.sidebar.header("2. 계산할 지표 선택")
 selected_metric = st.sidebar.selectbox("지표 선택", component_names, index=0)
-spec = all_components[selected_metric]
+spec = PRESET_COMPONENTS[selected_metric]
 
 tab1, tab2, tab3 = st.tabs(["① PID·SEQ별 계수", "② 반복도 (ANOVA)", "③ 일치도 (Bland-Altman)"])
 
 # --------------------------- Tab 1 ---------------------------
 with tab1:
     st.subheader(f"선택 지표: {selected_metric}")
-    val_test = compute_component(df_test, spec).rename(columns={"VALUE": "TEST"})
-    val_ref = compute_component(df_ref, spec).rename(columns={"VALUE": "REF"})
+    st.latex(COMPONENT_FORMULAS[selected_metric])
+
+    val_test = compute_component(df_test, spec).rename(columns={"VALUE": "Coefficient"})
+    val_ref = compute_component(df_ref, spec).rename(columns={"VALUE": "Coefficient"})
 
     c1, c2 = st.columns(2)
     with c1:
@@ -251,7 +259,12 @@ with tab1:
         st.markdown("**대조기기**")
         st.dataframe(val_ref.sort_values(["PID", "SEQ"]), use_container_width=True)
 
-    combined = pd.merge(val_test, val_ref, on=["PID", "SEQ"], how="outer").sort_values(["PID", "SEQ"])
+    combined = pd.merge(
+        val_test.rename(columns={"Coefficient": "Coefficient_시험기기"}),
+        val_ref.rename(columns={"Coefficient": "Coefficient_대조기기"}),
+        on=["PID", "SEQ"],
+        how="outer",
+    ).sort_values(["PID", "SEQ"])
     csv_buf = io.StringIO()
     combined.to_csv(csv_buf, index=False)
     st.download_button("결과 CSV 다운로드 (시험/대조 병합)", csv_buf.getvalue(), file_name=f"{selected_metric}_by_PID_SEQ.csv")
