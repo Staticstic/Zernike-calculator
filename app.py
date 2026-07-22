@@ -1,13 +1,57 @@
 import io
+import glob
 import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import statsmodels.formula.api as smf
 
 st.set_page_config(page_title="Zernike 계수 분석", layout="wide")
 
 REQUIRED_COLS = ["PID", "SEQ", "NO", "ORDER", "RADIAL", "NAME", "COEF"]
+
+
+# ---------------------------------------------------------------------------
+# Matplotlib 한글 폰트 설정
+#   - 서버(Streamlit Cloud 등)에 설치된 한글 폰트를 자동 탐색해 등록.
+#   - packages.txt 에 fonts-nanum 을 추가해두면 배포 환경에도 자동 설치됨.
+# ---------------------------------------------------------------------------
+
+def _setup_korean_font():
+    preferred_names = ["NanumGothic", "Noto Sans CJK KR", "Noto Sans KR", "Malgun Gothic", "AppleGothic"]
+    installed = {f.name for f in fm.fontManager.ttflist}
+    for name in preferred_names:
+        if name in installed:
+            plt.rcParams["font.family"] = name
+            plt.rcParams["axes.unicode_minus"] = False
+            return name
+
+    # 시스템에 폰트 파일은 있으나 matplotlib 캐시에 아직 없는 경우 직접 등록
+    search_patterns = [
+        "/usr/share/fonts/**/Nanum*.ttf",
+        "/usr/share/fonts/**/Nanum*.otf",
+        "/usr/share/fonts/**/NotoSansCJK*.ttc",
+        "/usr/share/fonts/**/NotoSansKR*.otf",
+        "/usr/share/fonts/**/malgun*.ttf",
+    ]
+    for pattern in search_patterns:
+        for path in glob.glob(pattern, recursive=True):
+            try:
+                fm.fontManager.addfont(path)
+                name = fm.FontProperties(fname=path).get_name()
+                plt.rcParams["font.family"] = name
+                plt.rcParams["axes.unicode_minus"] = False
+                return name
+            except Exception:
+                continue
+
+    # 한글 폰트를 못 찾은 경우: 마이너스 기호 깨짐만이라도 방지
+    plt.rcParams["axes.unicode_minus"] = False
+    return None
+
+
+KOREAN_FONT_NAME = _setup_korean_font()
 
 # ---------------------------------------------------------------------------
 # 데이터 로드
@@ -183,13 +227,15 @@ def bland_altman_stats(merged):
 def plot_bland_altman(d, stats, metric_name):
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.scatter(d["MEAN"], d["DIFF"], alpha=0.7, edgecolor="k", linewidth=0.3)
-    ax.axhline(stats["mean_diff"], color="blue", linestyle="-", label=f"Mean diff = {stats['mean_diff']:.4f}")
+    ax.axhline(stats["mean_diff"], color="blue", linestyle="-", label=f"평균 차이 = {stats['mean_diff']:.4f}")
     ax.axhline(stats["loa_upper"], color="red", linestyle="--", label=f"+1.96 SD = {stats['loa_upper']:.4f}")
     ax.axhline(stats["loa_lower"], color="red", linestyle="--", label=f"-1.96 SD = {stats['loa_lower']:.4f}")
-    ax.set_xlabel("Mean of Test & Reference")
-    ax.set_ylabel("Difference (Test - Reference)")
+    ax.set_xlabel("시험기기·대조기기 평균")
+    ax.set_ylabel("차이 (시험기기 - 대조기기)")
     ax.set_title(f"Bland-Altman Plot: {metric_name}")
     ax.legend(fontsize=8)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
     fig.tight_layout()
     return fig
 
@@ -201,14 +247,63 @@ def plot_bland_altman(d, stats, metric_name):
 st.markdown(
     """
     <style>
-    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+    /* 전체 배경 */
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stSidebar"] {
         background-color: #FFFFFF !important;
     }
-    [data-testid="stSidebar"] {
+
+    /* st.dataframe (interactive grid) 바깥 테두리 */
+    [data-testid="stDataFrame"] {
+        border: 1px solid #D1D5DB !important;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    /* st.table (정적 테이블) 테두리 */
+    [data-testid="stTable"] table {
+        border-collapse: collapse !important;
+        border: 1px solid #D1D5DB !important;
+    }
+    [data-testid="stTable"] th, [data-testid="stTable"] td {
+        border: 1px solid #D1D5DB !important;
         background-color: #FFFFFF !important;
     }
-    .stApp, .stApp * {
-        color: #1a1a1a;
+    [data-testid="stTable"] th {
+        background-color: #F3F4F6 !important;
+    }
+
+    /* 탭 */
+    [data-testid="stTabs"] button {
+        border: 1px solid #D1D5DB !important;
+        border-bottom: none !important;
+        background-color: #F9FAFB !important;
+        border-radius: 6px 6px 0 0;
+    }
+    [data-testid="stTabs"] button[aria-selected="true"] {
+        background-color: #FFFFFF !important;
+        border-bottom: 2px solid #2563EB !important;
+    }
+
+    /* 버튼, 다운로드 버튼 */
+    .stButton > button, .stDownloadButton > button {
+        border: 1px solid #D1D5DB !important;
+        background-color: #FFFFFF !important;
+        border-radius: 6px;
+    }
+
+    /* selectbox, radio, file uploader 컨테이너 */
+    [data-testid="stSelectbox"] > div > div,
+    [data-testid="stFileUploader"] section {
+        border: 1px solid #D1D5DB !important;
+        background-color: #FFFFFF !important;
+        border-radius: 6px;
+    }
+
+    /* 카드형 구분을 위한 컨테이너 테두리 (columns 안 내용 감싸기용) */
+    div[data-testid="column"] {
+        border: 1px solid #E5E7EB;
+        border-radius: 8px;
+        padding: 12px;
     }
     </style>
     """,
@@ -223,6 +318,11 @@ with st.sidebar:
     test_file = st.file_uploader("시험기기 파일 (csv/xlsx)", type=["csv", "xlsx", "xls"], key="test")
     ref_file = st.file_uploader("대조기기 파일 (csv/xlsx)", type=["csv", "xlsx", "xls"], key="ref")
     st.caption("필수 컬럼: PID, SEQ, NO, ORDER, RADIAL, NAME, COEF")
+    if KOREAN_FONT_NAME is None:
+        st.warning(
+            "그래프용 한글 폰트를 찾지 못했습니다. 배포 저장소 루트에 `packages.txt` 파일을 만들고 "
+            "`fonts-nanum`을 한 줄 적어두면 재배포 시 자동 설치됩니다."
+        )
 
 if not test_file or not ref_file:
     st.info("좌측에서 시험기기와 대조기기 파일을 모두 업로드해주세요.")
