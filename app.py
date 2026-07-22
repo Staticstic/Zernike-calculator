@@ -17,15 +17,35 @@ def read_uploaded(file):
     if file.name.lower().endswith((".xlsx", ".xls")):
         df = pd.read_excel(file)
     else:
-        df = pd.read_csv(file)
-    df.columns = [c.strip().upper() for c in df.columns]
+        # utf-8-sig: 엑셀에서 저장한 CSV에 흔한 BOM(\ufeff)을 자동 제거
+        try:
+            df = pd.read_csv(file, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            file.seek(0)
+            df = pd.read_csv(file, encoding="cp949")
+
+    # 컬럼명 정리: BOM, 공백 제거 후 대문자로 통일
+    df.columns = [c.replace("\ufeff", "").strip().upper() for c in df.columns]
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
-        raise ValueError(f"다음 컬럼이 없습니다: {missing}")
+        raise ValueError(f"다음 컬럼이 없습니다: {missing} (현재 컬럼: {list(df.columns)})")
+
     df = df[REQUIRED_COLS].copy()
+
+    # PID는 항상 문자열로 통일 (파일마다 숫자/문자로 다르게 읽히는 것을 방지 -> merge 오류의 주 원인)
+    df["PID"] = df["PID"].astype(str).str.strip()
+
+    # SEQ, NO, ORDER, RADIAL은 정수로 통일 (파일 간 dtype이 달라지면 merge 시 ValueError 발생)
     for c in ["SEQ", "NO", "ORDER", "RADIAL"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+        df[c] = pd.to_numeric(df[c], errors="coerce").astype("Int64")
+
     df["COEF"] = pd.to_numeric(df["COEF"], errors="coerce")
+
+    bad_rows = df[df[["SEQ", "NO", "ORDER", "RADIAL", "COEF"]].isna().any(axis=1)]
+    if len(bad_rows) > 0:
+        st.warning(f"숫자로 변환할 수 없는 값이 있는 행 {len(bad_rows)}개는 제외하고 진행합니다.")
+        df = df.dropna(subset=["SEQ", "NO", "ORDER", "RADIAL", "COEF"])
+
     return df
 
 
