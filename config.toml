@@ -5,3 +5,7 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F3F4F6"
 textColor = "#1A1A1A"
 font = "sans serif"
+borderColor = "#D1D5DB"
+dataframeBorderColor = "#D1D5DB"
+dataframeHeaderBackgroundColor = "#F3F4F6"
+showWidgetBorder = true
