@@ -6,6 +6,7 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import statsmodels.formula.api as smf
+import pingouin as pg
 
 st.set_page_config(page_title="Zernike 계수 분석", layout="wide")
 
@@ -142,13 +143,17 @@ def compute_component(df, spec):
 
 
 # ---------------------------------------------------------------------------
-# 반복도 (One-way random effects ANOVA, REML via mixedlm)
+# 반복도
+#   - 평균, Sw(반복측정 표준편차), CV, RC: One-way random effects ANOVA
+#     (statsmodels mixedlm, REML)
+#   - ICC: pingouin.intraclass_corr 의 ICC1 (one-way random effects 모델과
+#     동일한 가정을 쓰는 지표로, PID=targets, SEQ=raters)
 # ---------------------------------------------------------------------------
 
-def repeatability_mixedlm(values_df):
+def repeatability_analysis(values_df):
     """
     values_df: columns PID, SEQ, VALUE (한 기기의 반복측정 결과)
-    반환: dict of 지표들
+    반환: {"mean", "Sw", "RC", "CV(%)", "ICC"} 또는 None / {"error": ...}
     """
     d = values_df.dropna(subset=["VALUE"]).copy()
     d["PID"] = d["PID"].astype(str)
@@ -157,34 +162,40 @@ def repeatability_mixedlm(values_df):
     if n_subjects < 2 or n_obs < n_subjects + 1:
         return None
 
+    # --- mixedlm (REML): 평균, Sw, CV, RC ---
     try:
         model = smf.mixedlm("VALUE ~ 1", data=d, groups=d["PID"])
         result = model.fit(reml=True)
     except Exception as e:
         return {"error": str(e)}
 
-    tau2 = float(result.cov_re.iloc[0, 0])
-    sigma2 = float(result.scale)
+    sigma2 = max(float(result.scale), 1e-12)
     grand_mean = float(d["VALUE"].mean())
-
-    tau2 = max(tau2, 0.0)
-    sigma2 = max(sigma2, 1e-12)
-
     sw = np.sqrt(sigma2)  # within-subject (repeatability) SD
-    icc = tau2 / (tau2 + sigma2) if (tau2 + sigma2) > 0 else np.nan
     cv = (sw / grand_mean * 100) if grand_mean != 0 else np.nan
     rc = 1.96 * np.sqrt(2) * sw  # Repeatability Coefficient
 
+    # --- pingouin ICC1 ---
+    # pingouin 버전에 따라 Type 라벨이 "ICC1"(구버전) 또는 "ICC(1,1)"(신버전)으로 다르게 표기됨
+    icc_value = None
+    try:
+        icc_table = pg.intraclass_corr(
+            data=d, targets="PID", raters="SEQ", ratings="VALUE", nan_policy="omit"
+        )
+        icc_row = icc_table[icc_table["Type"].isin(["ICC1", "ICC(1,1)"])]
+        if icc_row.empty:
+            icc_row = icc_table[icc_table["Type"].astype(str).str.startswith("ICC1")]
+        if not icc_row.empty:
+            icc_value = round(float(icc_row["ICC"].values[0]), 3)
+    except Exception:
+        icc_value = None
+
     return {
-        "n_subjects": n_subjects,
-        "n_obs": n_obs,
-        "grand_mean": grand_mean,
-        "between_subject_var": tau2,
-        "within_subject_var": sigma2,
-        "within_subject_sd": sw,
-        "ICC": icc,
+        "mean": grand_mean,
+        "Sw": sw,
+        "RC": rc,
         "CV(%)": cv,
-        "Repeatability_Coefficient": rc,
+        "ICC": icc_value,
     }
 
 
@@ -199,11 +210,14 @@ def pair_average(test_vals, ref_vals):
     return merged
 
 
-def pair_by_seq(test_vals, ref_vals):
-    t = test_vals.rename(columns={"VALUE": "TEST"})
-    r = ref_vals.rename(columns={"VALUE": "REF"})
-    merged = pd.merge(t, r, on=["PID", "SEQ"], how="inner")
-    return merged[["PID", "SEQ", "TEST", "REF"]]
+def pair_first_seq(test_vals, ref_vals):
+    """각 PID의 가장 첫 번째(SEQ 최솟값) 측정값끼리만 짝지어 비교."""
+    t_first = test_vals.loc[test_vals.groupby("PID")["SEQ"].idxmin()]
+    r_first = ref_vals.loc[ref_vals.groupby("PID")["SEQ"].idxmin()]
+    t = t_first[["PID", "VALUE"]].rename(columns={"VALUE": "TEST"})
+    r = r_first[["PID", "VALUE"]].rename(columns={"VALUE": "REF"})
+    merged = pd.merge(t, r, on="PID", how="inner")
+    return merged
 
 
 def bland_altman_stats(merged):
@@ -309,8 +323,8 @@ with tab2:
     val_test = compute_component(df_test, spec)
     val_ref = compute_component(df_ref, spec)
 
-    res_test = repeatability_mixedlm(val_test)
-    res_ref = repeatability_mixedlm(val_ref)
+    res_test = repeatability_analysis(val_test)
+    res_ref = repeatability_analysis(val_ref)
 
     def show_result(name, res):
         st.markdown(f"**{name}**")
@@ -321,15 +335,11 @@ with tab2:
             st.error(f"모델 적합 실패: {res['error']}")
             return
         r = {
-            "환자 수": res["n_subjects"],
-            "총 관측치 수": res["n_obs"],
-            "전체 평균": round(res["grand_mean"], 5),
-            "환자간 분산 (τ²)": round(res["between_subject_var"], 6),
-            "환자내(오차) 분산 (σ²)": round(res["within_subject_var"], 6),
-            "반복측정 표준편차 (Sw)": round(res["within_subject_sd"], 5),
-            "ICC": round(res["ICC"], 4),
+            "평균 (Mean)": round(res["mean"], 5),
+            "Sw (반복측정 표준편차)": round(res["Sw"], 5),
+            "RC (Repeatability Coefficient)": round(res["RC"], 5),
             "CV (%)": round(res["CV(%)"], 3) if not np.isnan(res["CV(%)"]) else None,
-            "Repeatability Coefficient (1.96*√2*Sw)": round(res["Repeatability_Coefficient"], 5),
+            "ICC (ICC1)": res["ICC"] if res["ICC"] is not None else "계산 불가",
         }
         st.table(pd.DataFrame(r.items(), columns=["항목", "값"]).set_index("항목"))
 
@@ -344,7 +354,7 @@ with tab3:
     st.subheader(f"일치도 분석 (Bland-Altman): {selected_metric}")
     pairing_mode = st.radio(
         "짝짓기 방식 선택",
-        ["환자별 반복측정 평균끼리 비교", "동일 SEQ(순서)끼리 짝지어 비교"],
+        ["환자별 반복측정 평균끼리 비교", "첫 번째 측정값끼리 짝지어 비교"],
         horizontal=True,
     )
 
@@ -354,7 +364,7 @@ with tab3:
     if pairing_mode.startswith("환자별"):
         merged = pair_average(val_test, val_ref)
     else:
-        merged = pair_by_seq(val_test, val_ref)
+        merged = pair_first_seq(val_test, val_ref)
 
     if merged.empty:
         st.warning("짝지을 수 있는 데이터가 없습니다. PID(및 SEQ)가 두 파일 간에 일치하는지 확인해주세요.")
